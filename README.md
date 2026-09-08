@@ -55,7 +55,7 @@ mapping's raw coverage would suggest.
 ## Install and use
 
 ```sh
-git clone https://github.com/fcbond/cldf2wn
+git clone https://github.com/bond-lab/cldf2wn
 cd cldf2wn
 uv run --with-editable . -- cldf2wn --help
 ```
