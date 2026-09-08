@@ -141,6 +141,54 @@ PWN offsets in the Borin list no longer resolve against CILI and are reported.
 - **Provenance** is kept: the Concepticon id in `dc:identifier`, the semantic field
   in `dc:subject`, the glottocode in the lexicon's `dc:source`.
 
+## Languages appearing in several datasets
+
+They are **not** merged, and merging them would be wrong.
+
+A glottocode is not a doculect identifier. In `castrosui` alone, twelve of the
+sixteen doculects share `sand1270` — they are twelve different village surveys of
+Sandong Sui, which is the entire point of a dialect survey. Merging by glottocode
+would collapse them into one.
+
+Across datasets it is no better. Forty-two glottocodes appear in more than one of
+the twelve datasets converted here, but the doculects behind them are usually
+different survey points recorded in incompatible notations. Pa-Hng (`pahn1237`)
+appears five times across three datasets:
+
+| concept | chenhmongmien | chenhmongmien | starostinhmongmien | wanghmongmien |
+|---|---|---|---|---|
+| | Baheng, West | Baheng, East | Northern Pa-Hng | Wenjie |
+| FIRE | `qa⁰³tau¹¹` | `qa⁰³teu¹¹` | `qa22=tou22` | `tɦɤ42` |
+| FISH | `njo¹¹` | `mpjo¹¹` | `ni̯o22` | `mpjo42` |
+| STONE | `qa⁰³jo³⁵` | `la⁰³ʑo³⁵` | `qa22=yo35` | `jo35` |
+
+Superscript tone letters against numeric tones, `=` for morpheme boundaries in one
+source and not the others, and only seventeen concepts shared by all five. Fusing
+those into a single "Pa-Hng wordnet" would invent a language nobody speaks.
+
+So each doculect stays its own lexicon, and **the ILI does the joining at query
+time** — which is what an interlingual index is for:
+
+```sh
+uv run examples/crosswalk.py i116556 out/*.xml
+```
+
+```
+  chenhmongmien-easternxiangxi                 da⁵⁵
+  chenhmongmien-chuanqiandian                  teu²¹
+  castrosui-shuigencentralsandong              ⁿdjət⁷
+  ...
+  i116556: 103 lexicons
+```
+
+103 of the 137 lexicons in four datasets have a word for `firewood`, reachable in
+one query, with no merging and no loss of the distinctions the surveys recorded.
+
+If you do want one lexicon per language — for Open Multilingual Wordnet
+distribution, say — that is a deliberate editorial act needing a transcription
+policy and a choice of reference variety, not something a converter should do
+silently.
+
 ## Honest limitations
 
 These are thin wordnets, and it is worth being clear about that.
