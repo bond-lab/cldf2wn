@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# converted output: regenerate with `cldf2wn convert`
+out/
+*.xml
+!tests/**/*.xml
