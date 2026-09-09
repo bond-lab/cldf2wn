@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from .convert import Doculect, LexiconStats
+from .convert import Attestation, Doculect, LexiconStats
 from .ili import Concept
 
 logger = logging.getLogger(__name__)
@@ -41,18 +41,26 @@ def _attributes(pairs: list[tuple[str, str]]) -> str:
     return "".join(f" {name}={quoteattr(value)}" for name, value in pairs if value)
 
 
-def _entries_of(doculect: Doculect, concepts: dict[str, Concept]) -> dict[tuple[str, str], list[str]]:
+def _entries_of(
+    doculect: Doculect, concepts: dict[str, Concept]
+) -> dict[tuple[str, str], tuple[list[str], Attestation]]:
     """Group a doculect's forms into (written form, part of speech) entries.
 
-    The value is the list of Concepticon ids that form expresses, which become the
-    entry's senses. A form used for both a noun and a verb concept yields two
-    entries, as WN-LMF requires one part of speech per lexical entry.
+    The value pairs the Concepticon ids that form expresses -- which become the
+    entry's senses -- with a merged attestation carrying its pronunciations. A form
+    used for both a noun and a verb concept yields two entries, as WN-LMF requires
+    one part of speech per lexical entry.
     """
-    entries: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for concept_id, forms in doculect.forms.items():
+    entries: dict[tuple[str, str], tuple[list[str], Attestation]] = {}
+    for concept_id, attestations in doculect.forms.items():
         pos = concepts[concept_id].pos
-        for form in forms:
-            entries[(form, pos)].append(concept_id)
+        for attestation in attestations:
+            key = (attestation.written, pos)
+            if key not in entries:
+                entries[key] = ([], Attestation(attestation.written))
+            concept_ids, merged = entries[key]
+            concept_ids.append(concept_id)
+            merged.merge(attestation)
     return entries
 
 
@@ -111,12 +119,23 @@ def write_dataset(
         )
 
         senses = 0
-        for index, ((form, pos), concept_ids) in enumerate(sorted(entries.items()), 1):
+        for index, ((form, pos), (concept_ids, attestation)) in enumerate(
+            sorted(entries.items()), 1
+        ):
             entry_id = f"{lexicon_id}-e{index:05d}"
             lines.append(f'    <LexicalEntry id="{entry_id}">')
-            lines.append(
-                f"      <Lemma writtenForm={quoteattr(form)} partOfSpeech=\"{pos}\"/>"
-            )
+            lemma = f"      <Lemma writtenForm={quoteattr(form)} partOfSpeech=\"{pos}\""
+            if not attestation.pronunciations:
+                lines.append(lemma + "/>")
+            else:
+                lines.append(lemma + ">")
+                for notation, value, phonemic in attestation.pronunciations:
+                    lines.append(
+                        f"        <Pronunciation notation={quoteattr(notation)} "
+                        f'phonemic="{str(phonemic).lower()}">{escape(value)}'
+                        "</Pronunciation>"
+                    )
+                lines.append("      </Lemma>")
             for position, concept_id in enumerate(sorted(concept_ids, key=int), 1):
                 lines.append(
                     f'      <Sense id="{entry_id}-{position}" '

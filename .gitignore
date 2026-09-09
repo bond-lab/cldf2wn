@@ -11,3 +11,4 @@ build/
 out/
 *.xml
 !tests/**/*.xml
+

@@ -27,6 +27,30 @@ GLOSS_COLUMNS: dict[str, str] = {
     "Spanish_Gloss": "es",
 }
 
+#: IDS labels its `Transcriptions` column with a ";"-separated list: the first label
+#: describes what is in `Form`, the rest describe `AlternativeValues` in order. These
+#: labels name a writing system, so a value carrying one belongs in `writtenForm`.
+ORTHOGRAPHIC_LABELS = {"standardorth", "standorth", "standard", "orth",
+                       "cyrilltrans", "latintrans", "standardorthtone"}
+
+#: These label a transcription, which belongs in `<Pronunciation>` instead.
+PHONETIC_LABELS = {"phonemic", "phonetic", "ipa"}
+
+
+@dataclass
+class Attestation:
+    """One attested form, with any transcription recorded alongside it."""
+
+    written: str
+    #: (notation, transcription, phonemic) triples for `<Pronunciation>`
+    pronunciations: list[tuple[str, str, bool]] = field(default_factory=list)
+
+    def merge(self, other: Attestation) -> None:
+        """Fold another attestation of the same written form into this one."""
+        for pronunciation in other.pronunciations:
+            if pronunciation not in self.pronunciations:
+                self.pronunciations.append(pronunciation)
+
 
 @dataclass
 class Doculect:
@@ -36,8 +60,8 @@ class Doculect:
     name: str
     glottocode: str
     iso: str
-    #: Concepticon id -> written forms attested for it
-    forms: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    #: Concepticon id -> attestations
+    forms: dict[str, list[Attestation]] = field(default_factory=lambda: defaultdict(list))
 
     @property
     def language_tag(self) -> str:
@@ -72,6 +96,51 @@ def _concepticon_column(row: dict[str, str]) -> str | None:
         if "oncepticon" in column and "Gloss" not in column:
             return column
     return None
+
+
+def _split(value: str | None) -> list[str]:
+    return [part.strip() for part in (value or "").split(";") if part.strip()]
+
+
+def attestation_of(row: dict[str, str], ipa_dataset: bool) -> Attestation | None:
+    """Turn one forms.csv row into an attestation.
+
+    Where the dataset labels its transcriptions -- IDS does -- an orthographic value
+    becomes the written form and a phonemic or phonetic one becomes a pronunciation.
+    Lexibank datasets carry no labels but are uniformly IPA, so the form doubles as
+    its own pronunciation: there is no orthography to prefer, and marking it as IPA
+    is more honest than presenting a transcription as a spelling.
+    """
+    values = [(row.get("Form") or row.get("Value") or "").strip()]
+    values += _split(row.get("AlternativeValues"))
+    labels = _split(row.get("Transcriptions"))
+
+    written = ""
+    pronunciations: list[tuple[str, str, bool]] = []
+    for index, value in enumerate(values):
+        if not value or value in MISSING_FORMS:
+            continue
+        label = labels[index] if index < len(labels) else ""
+        key = label.lower()
+        if key in PHONETIC_LABELS:
+            notation = "ipa" if key == "ipa" else label
+            entry = (notation, value, key == "phonemic")
+            if entry not in pronunciations:
+                pronunciations.append(entry)
+        elif not written:
+            written = value
+
+    if not written:
+        # only transcriptions were recorded, or the dataset labels nothing
+        for value in values:
+            if value and value not in MISSING_FORMS:
+                written = value
+                break
+    if not written:
+        return None
+    if ipa_dataset and not pronunciations:
+        pronunciations.append(("ipa", written, False))
+    return Attestation(written=written, pronunciations=pronunciations)
 
 
 def read_dataset(
@@ -126,20 +195,33 @@ def read_dataset(
             iso=(row.get("ISO639P3code") or "").strip(),
         )
 
+    rows = _read_csv(cldf / "forms.csv")
+    # Lexibank datasets segment into BIPA and carry no transcription labels; that
+    # combination identifies a wordlist whose forms are IPA throughout.
+    ipa_dataset = bool(rows) and "Segments" in rows[0] and "Transcriptions" not in rows[0]
+    if ipa_dataset:
+        logger.info("%s: forms look like IPA, recording them as pronunciations too",
+                    cldf.parent.name)
+
     kept = skipped = 0
-    for row in _read_csv(cldf / "forms.csv"):
+    for row in rows:
         doculect = doculects.get(row.get("Language_ID", ""))
         concept_id = concept_of.get(row.get("Parameter_ID", ""))
         if doculect is None or concept_id is None:
             skipped += 1
             continue
-        written = (row.get("Form") or row.get("Value") or "").strip()
-        if written in MISSING_FORMS:
+        attestation = attestation_of(row, ipa_dataset)
+        if attestation is None:
             skipped += 1
             continue
-        if written not in doculect.forms[concept_id]:
-            doculect.forms[concept_id].append(written)
+        existing = next(
+            (a for a in doculect.forms[concept_id] if a.written == attestation.written), None
+        )
+        if existing is None:
+            doculect.forms[concept_id].append(attestation)
             kept += 1
+        else:
+            existing.merge(attestation)
     logger.info("%s: kept %d forms, skipped %d", cldf.parent.name, kept, skipped)
 
     return [d for d in doculects.values() if d.forms], dict(extra_glosses)

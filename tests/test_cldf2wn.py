@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from cldf2wn.convert import Doculect, read_dataset
+from cldf2wn.convert import Attestation, Doculect, attestation_of, read_dataset
 from cldf2wn.ili import Concept, build_mapping, load_mapping, synset_key, write_mapping
 from cldf2wn.lmf import Metadata, write_dataset
 
@@ -155,7 +155,7 @@ def test_read_dataset_drops_languages_with_no_forms(cldf: Path) -> None:
 def test_read_dataset_deduplicates_forms(cldf: Path) -> None:
     doculects, _ = read_dataset(cldf, CONCEPTS)
     alpha = next(d for d in doculects if d.id == "Alpha")
-    assert alpha.forms["1"] == ["sol", "soli"]
+    assert [a.written for a in alpha.forms["1"]] == ["sol", "soli"]
 
 
 def test_read_dataset_ignores_missing_and_unmapped(cldf: Path) -> None:
@@ -177,6 +177,73 @@ def test_read_dataset_requires_the_cldf_tables(tmp_path: Path) -> None:
     empty.mkdir()
     with pytest.raises(FileNotFoundError):
         read_dataset(empty, CONCEPTS)
+
+
+# --- transcriptions and pronunciation ---------------------------------------
+
+
+def test_labelled_orthography_becomes_the_written_form() -> None:
+    """IDS Hungarian: Form is standard orthography, the alternative is phonemic."""
+    row = {"Form": "világ", "AlternativeValues": "wilaag",
+           "Transcriptions": "Standard;Phonemic"}
+    attestation = attestation_of(row, ipa_dataset=False)
+    assert attestation.written == "világ"
+    assert attestation.pronunciations == [("Phonemic", "wilaag", True)]
+
+
+def test_orthography_is_preferred_even_when_it_comes_second() -> None:
+    """IDS Estonian labels the phonemic value first and the orthography second."""
+    row = {"Form": "maailm", "AlternativeValues": "maailma",
+           "Transcriptions": "Phonemic;StandOrth"}
+    attestation = attestation_of(row, ipa_dataset=False)
+    assert attestation.written == "maailma"
+    assert attestation.pronunciations == [("Phonemic", "maailm", True)]
+
+
+def test_cyrillic_transliteration_counts_as_orthography() -> None:
+    row = {"Form": "дуниял", "AlternativeValues": "duniyal",
+           "Transcriptions": "CyrillTrans;Phonemic"}
+    attestation = attestation_of(row, ipa_dataset=False)
+    assert attestation.written == "дуниял"
+    assert attestation.pronunciations == [("Phonemic", "duniyal", True)]
+
+
+def test_phonetic_label_is_not_marked_phonemic() -> None:
+    row = {"Form": "lak.33", "Transcriptions": "phonetic"}
+    attestation = attestation_of(row, ipa_dataset=False)
+    assert attestation.pronunciations == [("phonetic", "lak.33", False)]
+    # nothing orthographic was recorded, so the transcription has to serve as the form
+    assert attestation.written == "lak.33"
+
+
+def test_ipa_label_is_normalised_to_lowercase_notation() -> None:
+    row = {"Form": "top", "Transcriptions": "IPA"}
+    assert attestation_of(row, ipa_dataset=False).pronunciations == [("ipa", "top", False)]
+
+
+def test_lexibank_forms_double_as_their_own_pronunciation() -> None:
+    row = {"Form": "ⁿdjət⁷", "Value": "ⁿdjət⁷"}
+    attestation = attestation_of(row, ipa_dataset=True)
+    assert attestation.written == "ⁿdjət⁷"
+    assert attestation.pronunciations == [("ipa", "ⁿdjət⁷", False)]
+
+
+def test_unlabelled_non_ipa_dataset_gets_no_pronunciation() -> None:
+    assert attestation_of({"Form": "sol"}, ipa_dataset=False).pronunciations == []
+
+
+def test_missing_form_yields_no_attestation() -> None:
+    assert attestation_of({"Form": "?", "Value": ""}, ipa_dataset=True) is None
+
+
+def test_pronunciation_is_written_to_the_lemma(cldf: Path, tmp_path: Path) -> None:
+    doculect = Doculect("L", "L", "", "aaa")
+    doculect.forms["1"] = [Attestation("world", [("ipa", "wɜːld", False)])]
+    out = tmp_path / "out.xml"
+    write_dataset(out, [doculect], CONCEPTS, {}, "demo", Metadata("0.1", "", ""))
+    text = out.read_text(encoding="utf8")
+    assert '<Pronunciation notation="ipa" phonemic="false">wɜːld</Pronunciation>' in text
+    assert "</Lemma>" in text
 
 
 # --- lmf.py -----------------------------------------------------------------
@@ -243,7 +310,7 @@ def test_ids_are_unique_across_the_document(cldf: Path, tmp_path: Path) -> None:
 
 def test_markup_in_forms_is_escaped(tmp_path: Path) -> None:
     doculect = Doculect("L", "L & Co", "", "aaa")
-    doculect.forms["1"] = ["a<b", "c&d"]
+    doculect.forms["1"] = [Attestation("a<b"), Attestation("c&d")]
     out = tmp_path / "out.xml"
     write_dataset(out, [doculect], CONCEPTS, {}, "demo", Metadata("0.1", "", ""))
     text = out.read_text(encoding="utf8")
